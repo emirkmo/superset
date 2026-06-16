@@ -19,8 +19,10 @@
 
 from __future__ import annotations
 
+import copy
+import json
 from contextlib import contextmanager
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 from unittest.mock import patch
 
 import pytest
@@ -30,7 +32,8 @@ from sqlalchemy.orm.session import Session
 from sqlalchemy.pool import StaticPool
 from sqlalchemy.sql.elements import ColumnElement
 
-from superset.superset_typing import AdhocColumn
+from superset.superset_typing import AdhocColumn, AdhocMetric, OrderBy
+from tests.unit_tests.conftest import with_feature_flags
 
 if TYPE_CHECKING:
     from superset.models.core import Database
@@ -801,6 +804,170 @@ def test_process_orderby_expression_with_template_processor(
     assert call_args["template_processor"] is template_processor
 
     assert result == "processed_column DESC"
+
+
+def _assert_get_sqla_query_does_not_mutate_orderby(
+    database: Database,
+    sql_expression: str,
+    expected_sql_fragment: str,
+) -> None:
+    """
+    Order a query by an ad-hoc SQL metric and assert the caller's orderby
+    dicts are left untouched.
+
+    The processed (Jinja-rendered, sqlglot-normalized) expression must not be
+    written back into the shared dict, which would change the cache key of a
+    rehydrated query context (see issue #37114). ``expected_sql_fragment`` is
+    matched against the whitespace-stripped SQL, as sqlglot may normalize the
+    output slightly.
+    """
+    from superset.connectors.sqla.models import SqlaTable, TableColumn
+
+    table = SqlaTable(
+        database=database,
+        schema=None,
+        table_name="t",
+        columns=[TableColumn(column_name="a", type="INTEGER")],
+    )
+
+    adhoc_metric: AdhocMetric = {
+        "expressionType": "SQL",
+        "sqlExpression": sql_expression,
+        "label": "my metric",
+        "hasCustomLabel": True,
+    }
+    orderby: list[OrderBy] = [(copy.deepcopy(adhoc_metric), False)]
+    original_orderby = copy.deepcopy(orderby)
+
+    query = table.get_sqla_query(
+        metrics=[adhoc_metric],
+        orderby=orderby,
+        is_timeseries=False,
+        row_limit=10,
+    )
+
+    with database.get_sqla_engine() as engine:
+        sql = str(
+            query.sqla_query.compile(
+                dialect=engine.dialect, compile_kwargs={"literal_binds": True}
+            )
+        )
+
+    assert expected_sql_fragment in sql.replace(" ", "")
+    assert orderby == original_orderby
+    assert cast(AdhocMetric, orderby[0][0])["sqlExpression"] == sql_expression
+
+
+def test_get_sqla_query_does_not_mutate_adhoc_orderby(database: Database) -> None:
+    """
+    Test that `get_sqla_query` does not mutate ad-hoc ORDER BY entries.
+    """
+    _assert_get_sqla_query_does_not_mutate_orderby(
+        database,
+        "SUM(CASE \r\n      WHEN a > 0\r\n      THEN 1\r\n    END)",
+        "SUM(CASEWHENa>0THEN1END)",
+    )
+
+
+@with_feature_flags(ENABLE_TEMPLATE_PROCESSING=True)
+def test_get_sqla_query_does_not_mutate_adhoc_orderby_with_jinja(
+    database: Database,
+) -> None:
+    """
+    Test that Jinja in an ad-hoc ORDER BY entry is not rendered back.
+    """
+    _assert_get_sqla_query_does_not_mutate_orderby(
+        database,
+        "SUM(CASE WHEN a > {{ 1 + 1 }} THEN 1 END)",
+        "a>2",
+    )
+
+
+def test_cache_key_stable_across_query_build(database: Database) -> None:
+    """
+    Test that `QueryObject.cache_key()` is unchanged by building the query.
+    """
+    from superset.common.query_object import QueryObject
+    from superset.connectors.sqla.models import SqlaTable, TableColumn
+
+    table = SqlaTable(
+        database=database,
+        schema=None,
+        table_name="t",
+        columns=[TableColumn(column_name="a", type="INTEGER")],
+    )
+
+    adhoc_metric: AdhocMetric = {
+        "expressionType": "SQL",
+        "sqlExpression": "SUM(CASE \r\n  WHEN a > 0\r\n  THEN a\r\nEND)",
+        "label": "my metric",
+        "hasCustomLabel": True,
+    }
+    query_obj = QueryObject(
+        datasource=table,
+        columns=[],
+        metrics=[adhoc_metric],
+        orderby=[(copy.deepcopy(adhoc_metric), False)],
+        is_timeseries=False,
+        row_limit=10,
+    )
+
+    cache_key_before = query_obj.cache_key()
+    table.get_query_str_extended(query_obj.to_dict())
+
+    assert query_obj.cache_key() == cache_key_before
+
+
+def test_rehydrated_query_context_cache_key_stable_across_query_build(
+    database: Database,
+) -> None:
+    """A rehydrated query must retain its cache key after SQL generation."""
+    from superset.common.chart_data import ChartDataResultFormat, ChartDataResultType
+    from superset.common.query_context import QueryContext
+    from superset.common.query_context_processor import QueryContextProcessor
+    from superset.common.query_object import QueryObject
+    from superset.connectors.sqla.models import SqlaTable, TableColumn
+
+    table = SqlaTable(
+        database=database,
+        schema=None,
+        table_name="t",
+        columns=[TableColumn(column_name="a", type="INTEGER")],
+    )
+    adhoc_metric: AdhocMetric = {
+        "expressionType": "SQL",
+        "sqlExpression": "SUM(CASE \r\n  WHEN a > 0\r\n  THEN a\r\nEND)",
+        "label": "my metric",
+        "hasCustomLabel": True,
+    }
+    serialized_context = json.dumps(
+        {"queries": [{"orderby": [[adhoc_metric, False]]}]}
+    )
+    cache_values = json.loads(serialized_context)
+    orderby = cast(list[OrderBy], cache_values["queries"][0]["orderby"])
+    query_obj = QueryObject(
+        datasource=table,
+        columns=[],
+        metrics=[adhoc_metric],
+        orderby=orderby,
+        is_timeseries=False,
+        row_limit=10,
+    )
+    query_context = QueryContext(
+        datasource=table,
+        queries=[query_obj],
+        slice_=None,
+        form_data={},
+        result_type=ChartDataResultType.FULL,
+        result_format=ChartDataResultFormat.JSON,
+        cache_values=cache_values,
+    )
+    processor = QueryContextProcessor(query_context)
+
+    cache_key_before = processor.cache_key()
+    table.get_query_str_extended(query_obj.to_dict())
+
+    assert processor.cache_key() == cache_key_before
 
 
 def test_process_select_expression_basic(
