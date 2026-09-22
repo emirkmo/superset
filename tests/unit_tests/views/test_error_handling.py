@@ -24,6 +24,7 @@ import pytest
 import sshtunnel
 from flask import Flask, Response
 from flask_babel import Babel
+from flask_jwt_extended.exceptions import NoAuthorizationError
 from sqlalchemy.exc import IntegrityError, OperationalError, ProgrammingError
 from werkzeug.exceptions import GatewayTimeout
 
@@ -66,6 +67,27 @@ class TestHandleApiExceptionSSHTunnelError:
         assert any(
             record.levelno == logging.WARNING
             and "BaseSSHTunnelForwarderError" in record.message
+            for record in caplog.records
+        )
+
+
+class TestHandleApiExceptionNoAuthorizationError:
+    def test_returns_401_and_logs_at_warning_not_error(
+        self, app, caplog: pytest.LogCaptureFixture
+    ):
+        @handle_api_exception
+        def view(self: object) -> FlaskResponse:
+            raise NoAuthorizationError("Missing JWT in cookies or headers")
+
+        with app.test_request_context():
+            with caplog.at_level(logging.WARNING):
+                response = cast(Response, view(self=object()))
+
+        assert response.status_code == 401
+        assert not any(record.levelno >= logging.ERROR for record in caplog.records)
+        assert any(
+            record.levelno == logging.WARNING
+            and "Api failed- no authorization" in record.message
             for record in caplog.records
         )
 
