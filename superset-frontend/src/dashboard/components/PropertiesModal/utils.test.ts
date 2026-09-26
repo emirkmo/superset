@@ -70,3 +70,44 @@ test('yields an empty name for a non-string label with no text label', () => {
     { id: 5, full_name: '', email: '' },
   ]);
 });
+
+test('matches option metadata by owner ID even when options have a different order', () => {
+  const options = [
+    {
+      value: 2,
+      label: 'Bob',
+      textLabel: 'Bob Brown',
+      ownerEmail: 'bob@example.com',
+    },
+    {
+      value: 1,
+      label: 'Alice',
+      textLabel: 'Alice Adams',
+      ownerEmail: 'alice@example.com',
+    },
+  ];
+
+  expect(
+    parseSelectedOwners(
+      [
+        { value: 1, label: 'Alice' },
+        { value: 2, label: 'Bob' },
+      ],
+      options,
+      [],
+    ),
+  ).toEqual([
+    { id: 1, full_name: 'Alice Adams', email: 'alice@example.com' },
+    { id: 2, full_name: 'Bob Brown', email: 'bob@example.com' },
+  ]);
+});
+
+test('clearing all owners produces an empty owner list', () => {
+  expect(
+    parseSelectedOwners(
+      [],
+      [],
+      [{ id: 1, full_name: 'Alice Adams', email: 'alice@example.com' }],
+    ),
+  ).toEqual([]);
+});
