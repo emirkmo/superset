@@ -20,9 +20,8 @@
 from __future__ import annotations
 
 import copy
-import json
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, cast
+from typing import cast, TYPE_CHECKING
 from unittest.mock import patch
 
 import pytest
@@ -33,6 +32,7 @@ from sqlalchemy.pool import StaticPool
 from sqlalchemy.sql.elements import ColumnElement
 
 from superset.superset_typing import AdhocColumn, AdhocMetric, OrderBy
+from superset.utils import json
 from tests.unit_tests.conftest import with_feature_flags
 
 if TYPE_CHECKING:
@@ -941,7 +941,17 @@ def test_rehydrated_query_context_cache_key_stable_across_query_build(
         "hasCustomLabel": True,
     }
     serialized_context = json.dumps(
-        {"queries": [{"orderby": [[adhoc_metric, False]]}]}
+        {
+            "queries": [
+                {
+                    "columns": [],
+                    "is_timeseries": False,
+                    "metrics": [adhoc_metric],
+                    "orderby": [[adhoc_metric, False]],
+                    "row_limit": 10,
+                }
+            ]
+        }
     )
     cache_values = json.loads(serialized_context)
     orderby = cast(list[OrderBy], cache_values["queries"][0]["orderby"])
@@ -964,10 +974,23 @@ def test_rehydrated_query_context_cache_key_stable_across_query_build(
     )
     processor = QueryContextProcessor(query_context)
 
-    cache_key_before = processor.cache_key()
+    context_cache_key_before = processor.cache_key()
+    query_cache_key_before = query_obj.cache_key()
     table.get_query_str_extended(query_obj.to_dict())
 
-    assert processor.cache_key() == cache_key_before
+    rehydrated_cache_values = json.loads(json.dumps(cache_values))
+    rehydrated_query_dict = rehydrated_cache_values["queries"][0]
+    rehydrated_query = QueryObject(
+        datasource=table,
+        columns=rehydrated_query_dict["columns"],
+        metrics=rehydrated_query_dict["metrics"],
+        orderby=cast(list[OrderBy], rehydrated_query_dict["orderby"]),
+        is_timeseries=rehydrated_query_dict["is_timeseries"],
+        row_limit=rehydrated_query_dict["row_limit"],
+    )
+
+    assert rehydrated_query.cache_key() == query_cache_key_before
+    assert processor.cache_key() == context_cache_key_before
 
 
 def test_process_select_expression_basic(
