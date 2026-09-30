@@ -680,6 +680,60 @@ describe('SelectFilterPlugin', () => {
     expect(options[1]).toHaveTextContent('alpha');
     expect(options[2]).toHaveTextContent('beta');
   });
+
+  test('shows create option for multi-select creatable filter when typing', async () => {
+    getWrapper({ creatable: true, multiSelect: true });
+    userEvent.type(screen.getByRole('combobox'), 'brand-new');
+    expect(await screen.findByTitle('brand-new')).toBeInTheDocument();
+  });
+
+  test('does not show create option when searchAllOptions is true', () => {
+    getWrapper({ creatable: true, searchAllOptions: true });
+    userEvent.type(screen.getByRole('combobox'), 'brand-new');
+    expect(screen.queryByTitle('brand-new')).not.toBeInTheDocument();
+  });
+});
+
+const renderCreatableSelectedValue = (value: string) => {
+  const props = {
+    ...selectMultipleProps,
+    formData: { ...selectMultipleProps.formData, creatable: true },
+    filterState: { value: [value] },
+  };
+  render(
+    // @ts-expect-error -- transformProps supplies the plugin's runtime props
+    <SelectFilterPlugin
+      // @ts-expect-error -- the fixture omits unrelated plugin callbacks
+      {...transformProps(props)}
+      setDataMask={jest.fn()}
+      showOverflow={false}
+    />,
+    {
+      useRedux: true,
+      initialState: {
+        nativeFilters: {
+          filters: { 'test-filter': { name: 'Test Filter' } },
+        },
+        dataMask: {
+          'test-filter': {
+            extraFormData: {},
+            filterState: { value: [value] },
+          },
+        },
+      },
+    },
+  );
+};
+
+test('renders created filterState values outside the dataset as selectable chips', async () => {
+  renderCreatableSelectedValue('custom-created-value');
+  expect(await screen.findByTitle('custom-created-value')).toBeInTheDocument();
+});
+
+test('does not duplicate a filterState chip already present in the dataset', async () => {
+  renderCreatableSelectedValue('boy');
+  await screen.findByTitle('boy');
+  expect(screen.queryAllByTitle('boy')).toHaveLength(1);
 });
 
 test('Select boolean FALSE value in single-select mode', async () => {

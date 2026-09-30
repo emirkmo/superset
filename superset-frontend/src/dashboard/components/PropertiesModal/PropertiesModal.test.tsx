@@ -19,6 +19,7 @@
 import {
   render,
   screen,
+  selectOption,
   userEvent,
   waitFor,
 } from 'spec/helpers/testing-library';
@@ -92,7 +93,7 @@ fetchMock.get(
   'http://localhost/api/v1/dashboard/related/owners?q=(filter:%27%27,page:0,page_size:100)',
   {
     body: {
-      count: 1,
+      count: 3,
       result: [
         {
           text: 'Superset Admin',
@@ -103,6 +104,11 @@ fetchMock.get(
           text: 'Inactive Admin',
           value: 2,
           extra: { active: false },
+        },
+        {
+          text: 'Second Active Owner',
+          value: 3,
+          extra: { active: true, email: 'second@example.com' },
         },
       ],
     },
@@ -177,6 +183,11 @@ const createProps = () => ({
 
 beforeEach(() => {
   jest.clearAllMocks();
+  SupersetCore.SupersetClient.configure({
+    protocol: 'http:',
+    host: 'localhost',
+    csrfToken: 'test',
+  });
 });
 
 afterAll(() => {
@@ -387,6 +398,78 @@ describe('PropertiesModal', () => {
       expect(submitCall.title).toBe('COVID Vaccine Dashboard');
       // certifiedBy and certificationDetails come from dashboardInfo, not props
     });
+  });
+
+  test('adds two owners and preserves a remaining owner absent from options', async () => {
+    mockedIsFeatureEnabled.mockReturnValue(false);
+    const put = jest.spyOn(SupersetCore.SupersetClient, 'put');
+    put.mockResolvedValue({
+      response: new Response(),
+      json: { result: {} },
+    });
+    const props = createProps();
+    render(
+      <PropertiesModal
+        {...props}
+        dashboardInfo={{
+          ...dashboardInfo,
+          json_metadata: mockedJsonMetadata,
+          owners: [
+            {
+              id: 2,
+              full_name: 'Inactive Admin',
+              email: 'inactive@example.com',
+            },
+            {
+              id: 4,
+              full_name: 'Existing Owner',
+              email: 'existing@example.com',
+            },
+          ],
+        }}
+      />,
+      { useRedux: true },
+    );
+
+    await screen.findByTestId('dashboard-edit-properties-form');
+    await userEvent.click(
+      screen.getByText('Access & ownership').closest('.ant-collapse-header')!,
+    );
+    await selectOption('Superset Admin', 'Owners');
+    await selectOption('Second Active Owner', 'Owners');
+
+    const existingOwnerChip = screen
+      .getAllByText('Inactive Admin')
+      .map(element => element.closest('.ant-select-selection-item'))
+      .find(Boolean);
+    expect(existingOwnerChip).toBeInTheDocument();
+    await userEvent.click(
+      existingOwnerChip!.querySelector('.ant-select-selection-item-remove')!,
+    );
+
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(put).toHaveBeenCalledTimes(1));
+    expect(JSON.parse(put.mock.calls[0][0].body as string).owners).toEqual([
+      4, 1, 3,
+    ]);
+    expect(props.onSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        owners: [
+          {
+            id: 4,
+            full_name: 'Existing Owner',
+            email: 'existing@example.com',
+          },
+          { id: 1, full_name: 'Superset Admin', email: '' },
+          {
+            id: 3,
+            full_name: 'Second Active Owner',
+            email: 'second@example.com',
+          },
+        ],
+      }),
+    );
+    put.mockRestore();
   });
 
   test('submitting with onlyApply:true', async () => {
@@ -628,7 +711,7 @@ describe('PropertiesModal', () => {
 
     const options = await findAllSelectOptions();
 
-    expect(options).toHaveLength(1);
+    expect(options).toHaveLength(2);
     expect(options[0]).toHaveTextContent('Superset Admin');
   }, 30000);
 
@@ -681,7 +764,7 @@ describe('PropertiesModal', () => {
 
     const options = await findAllSelectOptions();
 
-    expect(options).toHaveLength(1);
+    expect(options).toHaveLength(2);
     expect(options[0]).toHaveTextContent('Superset Admin');
   }, 30000);
 
