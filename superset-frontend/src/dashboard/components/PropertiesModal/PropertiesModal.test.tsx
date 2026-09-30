@@ -404,8 +404,9 @@ describe('PropertiesModal', () => {
     mockedIsFeatureEnabled.mockReturnValue(false);
     const put = jest.spyOn(SupersetCore.SupersetClient, 'put');
     put.mockResolvedValue({
+      response: new Response(),
       json: { result: {} },
-    } as Awaited<ReturnType<typeof SupersetCore.SupersetClient.put>>);
+    });
     const props = createProps();
     render(
       <PropertiesModal
