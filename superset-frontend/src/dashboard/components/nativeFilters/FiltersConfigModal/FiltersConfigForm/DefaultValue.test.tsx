@@ -17,6 +17,8 @@
  * under the License.
  */
 import { render } from 'spec/helpers/testing-library';
+import { type FormInstance } from '@superset-ui/core/components';
+import type { NativeFiltersForm } from '../types';
 import DefaultValue from './DefaultValue';
 
 const capturedFilterStates: unknown[] = [];
@@ -36,17 +38,18 @@ const FILTER_ID = 'filter-1';
 
 // A minimal stand-in for antd's FormInstance: DefaultValue only ever calls
 // `form.getFieldValue('filters')`.
-const makeForm = (filtersValue: Record<string, unknown>) => ({
-  getFieldValue: (name: string) =>
-    name === 'filters' ? filtersValue : undefined,
-});
+const makeForm = (filtersValue: Record<string, unknown>) =>
+  ({
+    getFieldValue: (name: string) =>
+      name === 'filters' ? filtersValue : undefined,
+  }) as FormInstance<NativeFiltersForm>;
 
 const baseProps = {
   hasDefaultValue: true,
   filterId: FILTER_ID,
   setDataMask: jest.fn(),
   hasDataset: true,
-  formData: { filterType: 'filter_select' } as any,
+  formData: { viz_type: 'filter_select' },
   enableNoResults: true,
 };
 
@@ -67,7 +70,7 @@ test('keeps the same filterState object reference across renders that do not cha
   const { rerender } = render(
     <DefaultValue
       {...baseProps}
-      form={makeForm({ [FILTER_ID]: formFilter }) as any}
+      form={makeForm({ [FILTER_ID]: formFilter })}
     />,
   );
 
@@ -77,7 +80,7 @@ test('keeps the same filterState object reference across renders that do not cha
   rerender(
     <DefaultValue
       {...baseProps}
-      form={makeForm({ [FILTER_ID]: formFilter }) as any}
+      form={makeForm({ [FILTER_ID]: formFilter })}
     />,
   );
 
@@ -99,14 +102,14 @@ test('produces a new filterState object once the underlying value actually chang
   const { rerender } = render(
     <DefaultValue
       {...baseProps}
-      form={makeForm({ [FILTER_ID]: formFilterWithValue([1, 2]) }) as any}
+      form={makeForm({ [FILTER_ID]: formFilterWithValue([1, 2]) })}
     />,
   );
 
   rerender(
     <DefaultValue
       {...baseProps}
-      form={makeForm({ [FILTER_ID]: formFilterWithValue([1, 2, 3]) }) as any}
+      form={makeForm({ [FILTER_ID]: formFilterWithValue([1, 2, 3]) })}
     />,
   );
 
